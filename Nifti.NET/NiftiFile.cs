@@ -2,7 +2,6 @@
 using System.Drawing;
 using System.IO;
 using System.IO.Compression;
-
 namespace Nifti.NET
 {
     public static class NiftiFile
@@ -39,6 +38,26 @@ namespace Nifti.NET
                     }
                 }
             }
+
+            if (TypeOf(result.Header) == FileType.UNKNOWN) throw new InvalidDataException("Not a NIfTI file (no magic bytes)");
+
+            return result;
+        }
+        public static Nifti ReadFromStream(MemoryStream ms, short forceType = NiftiHeader.DT_UNKNOWN)
+        {
+            Nifti result = new Nifti();
+
+            using (var stream = ms)
+            {
+                var hdr = ReadHeader(stream);
+                result.Header = hdr;
+                if (FileType.NII == TypeOf(hdr))
+                {
+                    result.Data = ReadData(stream, hdr, forceType);
+                }
+            }
+
+
 
             if (TypeOf(result.Header) == FileType.UNKNOWN) throw new InvalidDataException("Not a NIfTI file (no magic bytes)");
 
@@ -82,7 +101,7 @@ namespace Nifti.NET
                 Write(stream, nifti.Header);
 
                 // For a nifti file we can just keep on writing.
-                if (FileType.NII == type) Write(stream, nifti.Data);
+                if (FileType.NII == type) WriteData(stream, nifti.Data, nifti.Header.datatype);
                 stream.Flush();
             }
 
@@ -93,7 +112,7 @@ namespace Nifti.NET
                 if (newPath.Equals(path)) newPath += ".img";
                 using (var stream = WriteStream(newPath, gzip))
                 {
-                    Write(stream, nifti.Data);
+                    WriteData(stream, nifti.Data, nifti.Header.datatype);
                     stream.Flush();
                 }
             }
@@ -165,67 +184,215 @@ namespace Nifti.NET
             else return FileType.UNKNOWN;
         }
 
-        private static dynamic ReadData(Stream stream, NiftiHeader hdr, short forceType)
-        {
-            var datatype = forceType != NiftiHeader.DT_UNKNOWN ? forceType : hdr.datatype;
-            var reverseBytes = hdr.SourceIsBigEndian();
-            var bytelen = stream.Length - stream.Position;
-            var data = InitData(datatype, bytelen);
+private static Array ReadData(Stream stream, NiftiHeader hdr, short forceType)
+{
+    var datatype = forceType != NiftiHeader.DT_UNKNOWN ? forceType : hdr.datatype;
+    var reverseBytes = hdr.SourceIsBigEndian();
+    var bytelen = stream.Length - stream.Position;
+    Array resultData = null;
 
+    // Read all data at once into a byte array
+    byte[] byteArray = new byte[bytelen];
+    stream.Read(byteArray, 0, byteArray.Length);
+
+    // Use MemoryStream and BinaryReader to interpret the byte array
+    using (var memoryStream = new MemoryStream(byteArray))
+    using (var reader = new BinaryReader(memoryStream))
+    {
+        switch(datatype)
+        {
+            case NiftiHeader.DT_FLOAT32:
+                float[] floatData = new float[bytelen / sizeof(float)];
+                for (int i = 0; i < floatData.Length; i++)
+                {
+                    floatData[i] = reverseBytes ? ReverseBytes(reader.ReadSingle()) : reader.ReadSingle();
+                }
+                resultData = floatData;
+                break;
+
+            case NiftiHeader.DT_INT32:
+                int[] intData = new int[bytelen / sizeof(int)];
+                for (int i = 0; i < intData.Length; i++)
+                {
+                    intData[i] = reverseBytes ? ReverseBytes(reader.ReadInt32()) : reader.ReadInt32();
+                }
+                resultData = intData;
+                break;
+
+            case NiftiHeader.DT_UINT32:
+                uint[] uintData = new uint[bytelen / sizeof(uint)];
+                for (int i = 0; i < uintData.Length; i++)
+                {
+                    uintData[i] = reverseBytes ? ReverseBytes(reader.ReadUInt32()) : reader.ReadUInt32();
+                }
+                resultData = uintData;
+                break;
+
+            case NiftiHeader.DT_INT16:
+                short[] shortData = new short[bytelen / sizeof(short)];
+                for (int i = 0; i < shortData.Length; i++)
+                {
+                    shortData[i] = reverseBytes ? ReverseBytes(reader.ReadInt16()) : reader.ReadInt16();
+                }
+                resultData = shortData;
+                break;
+
+            case NiftiHeader.DT_UINT16:
+                ushort[] ushortData = new ushort[bytelen / sizeof(ushort)];
+                for (int i = 0; i < ushortData.Length; i++)
+                {
+                    ushortData[i] = reverseBytes ? ReverseBytes(reader.ReadUInt16()) : reader.ReadUInt16();
+                }
+                resultData = ushortData;
+                break;
+
+            case NiftiHeader.DT_DOUBLE:
+                double[] doubleData = new double[bytelen / sizeof(double)];
+                for (int i = 0; i < doubleData.Length; i++)
+                {
+                    doubleData[i] = reverseBytes ? ReverseBytes(reader.ReadDouble()) : reader.ReadDouble();
+                }
+                resultData = doubleData;
+                break;
+
+            case NiftiHeader.DT_COMPLEX:
+                long[] longData = new long[bytelen / sizeof(long)];
+                for (int i = 0; i < longData.Length; i++)
+                {
+                    longData[i] = reverseBytes ? ReverseBytes(reader.ReadInt64()) : reader.ReadInt64();
+                }
+                resultData = longData;
+                break;
+
+            case NiftiHeader.DT_RGB24:
+                UnityEngine.Color[] rgbData = new UnityEngine.Color[bytelen / 3];
+                for (int i = 0; i < rgbData.Length; i++)
+                {
+                    byte r = reader.ReadByte();
+                    byte g = reader.ReadByte();
+                    byte b = reader.ReadByte();
+                    rgbData[i] = new UnityEngine.Color(r / 255f, g / 255f, b / 255f);
+                }
+                resultData = rgbData;
+                break;
+
+            case NiftiHeader.DT_RGBA32:
+                UnityEngine.Color[] rgbaData = new UnityEngine.Color[bytelen / 4];
+                for (int i = 0; i < rgbaData.Length; i++)
+                {
+                    byte r = reader.ReadByte();
+                    byte g = reader.ReadByte();
+                    byte b = reader.ReadByte();
+                    byte a = reader.ReadByte();
+                    rgbaData[i] = new UnityEngine.Color(r / 255f, g / 255f, b / 255f, a / 255f);
+                }
+                resultData = rgbaData;
+                break;
+
+            default:
+                resultData = byteArray; // Fall back to raw byte array for unsupported types
+                break;
+        }
+    }
+
+    return resultData;
+}
+
+// Helper methods to handle endianness
+private static float ReverseBytes(float value)
+{
+    byte[] bytes = BitConverter.GetBytes(value);
+    Array.Reverse(bytes);
+    return BitConverter.ToSingle(bytes, 0);
+}
+
+private static int ReverseBytes(int value)
+{
+    byte[] bytes = BitConverter.GetBytes(value);
+    Array.Reverse(bytes);
+    return BitConverter.ToInt32(bytes, 0);
+}
+
+private static short ReverseBytes(short value)
+{
+    byte[] bytes = BitConverter.GetBytes(value);
+    Array.Reverse(bytes);
+    return BitConverter.ToInt16(bytes, 0);
+}
+
+private static double ReverseBytes(double value)
+{
+    byte[] bytes = BitConverter.GetBytes(value);
+    Array.Reverse(bytes);
+    return BitConverter.ToDouble(bytes, 0);
+}
+
+private static long ReverseBytes(long value)
+{
+    byte[] bytes = BitConverter.GetBytes(value);
+    Array.Reverse(bytes);
+    return BitConverter.ToInt64(bytes, 0);
+}
+
+private static ushort ReverseBytes(ushort value)
+{
+    byte[] bytes = BitConverter.GetBytes(value);
+    Array.Reverse(bytes);
+    return BitConverter.ToUInt16(bytes, 0);
+}
+
+private static uint ReverseBytes(uint value)
+{
+    byte[] bytes = BitConverter.GetBytes(value);
+    Array.Reverse(bytes);
+    return BitConverter.ToUInt32(bytes, 0);
+}
+
+        private static void WriteData(Stream stream, object data, short datatype)
+        {
             switch(datatype)
             {
                 case NiftiHeader.DT_FLOAT32:
-                    for (int i = 0; i < data.Length; ++i) data[i] = ReadFloat(stream, reverseBytes);
+                    foreach(var voxel in data as float[])
+                        Write(stream, voxel);
                     break;
                 case NiftiHeader.DT_INT32:
-                    for (int i = 0; i < data.Length; ++i) data[i] = ReadInt(stream, reverseBytes);
+                    foreach(var voxel in data as int[])
+                        Write(stream, voxel);
                     break;
                 case NiftiHeader.DT_UINT32:
-                    for (int i = 0; i < data.Length; ++i) data[i] = ReadInt(stream, reverseBytes);
+                    foreach(var voxel in data as uint[])
+                        Write(stream, voxel);
                     break;
                 case NiftiHeader.DT_INT16:
-                    for (int i = 0; i < data.Length; ++i) data[i] = ReadShort(stream, reverseBytes);
+                    foreach(var voxel in data as short[])
+                        Write(stream, voxel);
                     break;
                 case NiftiHeader.DT_UINT16:
-                    for (int i = 0; i < data.Length; ++i) data[i] = ReadUShort(stream, reverseBytes);
+                    foreach(var voxel in data as ushort[])
+                        Write(stream, voxel);
                     break;
                 case NiftiHeader.DT_DOUBLE:
-                    for (int i = 0; i < data.Length; ++i) data[i] = ReadDouble(stream, reverseBytes);
+                    foreach(var voxel in data as double[])
+                        Write(stream, voxel);
                     break;
                 case NiftiHeader.DT_COMPLEX:
-                    for (int i = 0; i < data.Length; ++i) data[i] = ReadLong(stream, reverseBytes);
+                    foreach(var voxel in data as long[])
+                        Write(stream, voxel);
                     break;
                 case NiftiHeader.DT_RGB24:
-                    for (int i = 0; i < data.Length; ++i) data[i] = ReadRGB(stream, reverseBytes);
+                    foreach(var voxel in data as Color[])
+                        WriteRGB(stream, voxel);
                     break;
                 case NiftiHeader.DT_RGBA32:
-                    for (int i = 0; i < data.Length; ++i) data[i] = ReadRGBA(stream, reverseBytes);
+                    foreach(var voxel in data as Color[])
+                        WriteRGBA(stream, voxel);
                     break;
                 default:
-                    for (int i = 0; i < data.Length; ++i) data[i] = ReadByte(stream);
+                    foreach(var voxel in data as byte[])
+                        Write(stream, voxel);
                     break;
             }
-
-            return data;
-        }
-
-        private static void WriteData(Stream stream, dynamic data)
-        {
-            foreach(var voxel in data) Write(stream, voxel);
-        }
-
-        private static dynamic InitData(short datatype, long bytelen)
-        {
-            if (NiftiHeader.DT_FLOAT32 == datatype) return new float[bytelen / sizeof(float)];
-            if (NiftiHeader.DT_INT32 == datatype) return new int[bytelen / sizeof(int)];
-            if (NiftiHeader.DT_INT16 == datatype) return new short[bytelen / sizeof(short)];
-            if (NiftiHeader.DT_UINT16 == datatype) return new ushort[bytelen / sizeof(short)];
-            if (NiftiHeader.DT_DOUBLE == datatype) return new double[bytelen / sizeof(double)];
-            if (NiftiHeader.DT_COMPLEX == datatype) return new long[bytelen / sizeof(long)];
-            if (NiftiHeader.DT_RGB24 == datatype) return new Color[bytelen / 3];
-            if (NiftiHeader.DT_RGBA32 == datatype) return new Color[bytelen / 4];
-            //if (NiftiHeader.DT_BINARY == datatype) return new bool[bytelen * 8];
-            return new byte[bytelen];
         }
 
         private static NiftiHeader ReadHeader(Stream stream)
@@ -309,7 +476,7 @@ namespace Nifti.NET
 
             return hdr;
         }
-         
+
         private static void Write(Stream stream, NiftiHeader hdr)
         {
             Write(stream, NiftiHeader.EXPECTED_SIZE_OF_HDR);
@@ -408,8 +575,23 @@ namespace Nifti.NET
             stream.WriteByte(val);
         }
 
+        private static void WriteRGB(Stream stream, Color val)
+        {
+            stream.WriteByte(val.R);
+            stream.WriteByte(val.G);
+            stream.WriteByte(val.B);
+        }
+
+        private static void WriteRGBA(Stream stream, Color val)
+        {
+            stream.WriteByte(val.R);
+            stream.WriteByte(val.G);
+            stream.WriteByte(val.B);
+            stream.WriteByte(val.A);
+        }
+
         //private static void Write(Stream stream, byte[] vals) { foreach (var val in vals) Write(stream, val); }
-        private static void Write(Stream stream, byte[] vals) 
+        private static void Write(Stream stream, byte[] vals)
         {
             stream.Write(vals, 0, vals.Length);
         }
@@ -429,8 +611,8 @@ namespace Nifti.NET
 
         private static float ReadFloat(Stream stream, bool reverseBytes)
         {
-            return !reverseBytes ? 
-                BitConverter.ToSingle(ReadBytes(stream, 4), 0) 
+            return !reverseBytes ?
+                BitConverter.ToSingle(ReadBytes(stream, 4), 0)
                 : BitConverter.ToSingle(ReadBytesReversed(stream, 4), 0);
         }
 
@@ -442,7 +624,7 @@ namespace Nifti.NET
         private static int ReadInt(Stream stream, bool reverseBytes)
         {
             return !reverseBytes ?
-                BitConverter.ToInt32(ReadBytes(stream, 4), 0) 
+                BitConverter.ToInt32(ReadBytes(stream, 4), 0)
                 : BitConverter.ToInt32(ReadBytesReversed(stream, 4), 0);
         }
 
@@ -523,42 +705,13 @@ namespace Nifti.NET
 
         private static Nifti ConvertToRGB(Nifti nifti)
         {
-            // Handle 32bit RGBA data
-            if (nifti.Header.datatype == NiftiHeader.DT_RGBA32)
-            {
-                var bytedata = new byte[nifti.Data.Length * 4];
-                for (int i = 0; i < bytedata.Length; i += 4)
-                {
-                    // Convert RGB to uint
-                    bytedata[i] = nifti.Data[i / 4].R;
-                    bytedata[i + 1] = nifti.Data[i / 4].G;
-                    bytedata[i + 2] = nifti.Data[i / 4].B;
-                    bytedata[i + 3] = nifti.Data[i / 4].A;
-                }
-
-                nifti.Data = bytedata;
-            }
-            else
-            {
-                // Setup the header info in case someone converted from non-color input
-                nifti.Header.dim[0] = 5; // RGB and RGBA both have 5 dimensions
-                nifti.Header.dim[4] = 1;
-                nifti.Header.dim[5] = 1;
-                nifti.Header.bitpix = 24;
-                nifti.Header.datatype = NiftiHeader.DT_RGB;
-                nifti.Header.intent_code = NiftiHeader.NIFTI_INTENT_RGB_VECTOR;
-
-                var bytedata = new byte[nifti.Data.Length * 3];
-                for (int i = 0; i < bytedata.Length; i += 3)
-                {
-                    // Convert RGB to uint
-                    bytedata[i] = nifti.Data[i / 3].R;
-                    bytedata[i + 1] = nifti.Data[i / 3].G;
-                    bytedata[i + 2] = nifti.Data[i / 3].B;
-                }
-
-                nifti.Data = bytedata;
-            }
+            // Setup the header info in case someone converted from non-color input
+            nifti.Header.dim[0] = 5; // RGB and RGBA both have 5 dimensions
+            nifti.Header.dim[4] = 1;
+            nifti.Header.dim[5] = 1;
+            nifti.Header.bitpix = 24;
+            nifti.Header.datatype = NiftiHeader.DT_RGB;
+            nifti.Header.intent_code = NiftiHeader.NIFTI_INTENT_RGB_VECTOR;
 
             return nifti;
         }

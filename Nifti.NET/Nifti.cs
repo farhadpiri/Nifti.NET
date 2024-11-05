@@ -54,18 +54,7 @@ namespace Nifti.NET
         /// <summary>
         /// The underlying data structure as an array for fast linear processing.
         /// </summary>
-        public dynamic Data { get; set; }
-        /// <summary>
-        /// Allows multi-dimensional access to the data.
-        /// These coordinates correspond with the i, j, k system in the NiftiHeader, meaning the stride will increase from i to k (and onwards).
-        /// </summary>
-        /// <param name="idx"></param>
-        /// <returns></returns>
-        public dynamic this[params int[] idx]
-        {
-            get { return Data[DataIndexFor(idx)]; }
-            set { Data[DataIndexFor(idx)] = value; }
-        }
+        public Array Data { get; set; }
 
         /// <summary>
         /// Returns the linear index for a given multi-dimensional index.
@@ -130,6 +119,25 @@ namespace Nifti.NET
                 Data = (T[])Data
             };
         }
+
+        public float[] ToSingleArray()
+        {
+            Type type = this.Data.GetType().GetElementType();
+            if (type == typeof(float))
+                return this.Data as float[];
+            else if(type == typeof(double))
+                return Array.ConvertAll<double, float>(this.Data as double[], Convert.ToSingle);
+            else if(type == typeof(int))
+                return Array.ConvertAll<int, float>(this.Data as int[], Convert.ToSingle);
+            else if(type == typeof(uint))
+                return Array.ConvertAll<uint, float>(this.Data as uint[], Convert.ToSingle);
+            else if(type == typeof(short))
+                return Array.ConvertAll<short, float>(this.Data as short[], Convert.ToSingle);
+            else if(type == typeof(ushort))
+                return Array.ConvertAll<ushort, float>(this.Data as ushort[], Convert.ToSingle);
+            else
+                return null;
+        }
     }
 
     /// <summary>
@@ -138,9 +146,9 @@ namespace Nifti.NET
     /// <typeparam name="T"></typeparam>
     public class Nifti<T> : Nifti
     {
-        public new T[] Data { get { return ((Nifti)this).Data; } set { ((Nifti)this).Data = value; } }
+        public new T[] Data { get { return ((Nifti)this).Data as T[]; } set { ((Nifti)this).Data = value; } }
 
-        public new T this[params int[] idx]
+        public T this[params int[] idx]
         {
             get { return Data[DataIndexFor(idx)]; }
             set { Data[DataIndexFor(idx)] = value; }
